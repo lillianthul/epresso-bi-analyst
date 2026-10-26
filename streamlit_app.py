@@ -160,3 +160,35 @@ if (
     st.success("No issues found in these checks.")
 else:
     st.warning("Review the flagged records before using the results.")
+st.subheader("Revenue by Product Category")
+
+category_names = {
+    "C1": "Beans",
+    "C2": "Syrups",
+    "C3": "Espresso Machines",
+    "C4": "Accessories",
+    "C5": "Frothers"
+}
+
+if "Category ID" in filtered_data.columns:
+    category_data = filtered_data.copy()
+    category_data["Category"] = (
+        category_data["Category ID"]
+        .map(category_names)
+        .fillna("Unknown category")
+    )
+
+    category_revenue = (
+        category_data.groupby("Category")["Revenue"]
+        .sum()
+        .sort_values(ascending=False)
+    )
+
+    st.caption(f"Revenue for: {selected_year}")
+    st.bar_chart(category_revenue)
+    st.dataframe(
+        category_revenue.to_frame()
+        .style.format({"Revenue": "${:,.2f}"})
+    )
+else:
+    st.warning("Category analysis requires a Category ID column.")
