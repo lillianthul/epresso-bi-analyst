@@ -199,3 +199,40 @@ st.dataframe(
     monthly_revenue.to_frame()
     .style.format("${:,.2f}")
 )
+st.subheader("Supporting Data Tables")
+st.write("Upload the supporting CSV files for your analysis.")
+
+supporting_files = {
+    "Stores": st.file_uploader(
+        "Stores CSV", type="csv", key="stores_upload"
+    ),
+    "Products": st.file_uploader(
+        "Products CSV", type="csv", key="products_upload"
+    ),
+    "Categories": st.file_uploader(
+        "Categories CSV", type="csv", key="categories_upload"
+    ),
+    "Surveys": st.file_uploader(
+        "Survey results CSV", type="csv", key="surveys_upload"
+    ),
+}
+
+supporting_tables = {}
+
+for table_name, file in supporting_files.items():
+    if file is not None:
+        try:
+            table = pd.read_csv(
+                file, dtype=str, sep=None, engine="python"
+            )
+            supporting_tables[table_name] = table
+
+            st.success(
+                f"{table_name}: {len(table):,} rows loaded"
+            )
+
+            with st.expander(f"Preview {table_name}"):
+                st.dataframe(table.head(10))
+
+        except Exception as error:
+            st.error(f"Could not load {table_name}: {error}")
