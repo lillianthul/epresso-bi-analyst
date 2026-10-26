@@ -236,3 +236,86 @@ for table_name, file in supporting_files.items():
 
         except Exception as error:
             st.error(f"Could not load {table_name}: {error}")
+st.subheader("Customer Survey Results")
+
+if "Surveys" not in supporting_tables:
+    st.info("Upload the survey results CSV above to see this section.")
+else:
+    surveys = supporting_tables["Surveys"].copy()
+    surveys.columns = surveys.columns.str.strip()
+
+    required = {"Year", "Satisfaction", "Interest"}
+    missing = required - set(surveys.columns)
+
+    if missing:
+        st.error(
+            f"Survey file is missing: {', '.join(sorted(missing))}"
+        )
+    else:
+        surveys["Year"] = pd.to_numeric(
+            surveys["Year"].str.strip().str.replace(
+                r"^[Yy]", "", regex=True
+            ),
+            errors="coerce"
+        )
+
+        for column in ["Satisfaction", "Interest"]:
+            surveys[column] = pd.to_numeric(
+                surveys[column], errors="coerce"
+            )
+
+        if selected_year != "All years":
+            surveys = surveys[
+                surveys["Year"] == selected_year
+            ].copy()
+
+        st.caption(
+            f"Survey results for: {selected_year}. "
+            "Missing ratings are excluded from averages."
+        )
+
+        if surveys[["Satisfaction", "Interest"]].notna().any().any():
+            average_satisfaction = surveys["Satisfaction"].mean()
+            average_interest = surveys["Interest"].mean()
+
+            col1, col2 = st.columns(2)
+
+            col1.metric(
+                "Average Satisfaction",
+                f"{average_satisfaction:.2f}"
+                if pd.notna(average_satisfaction)
+                else "No data"
+            )
+
+            col2.metric(
+                "Average Interest",
+                f"{average_interest:.2f}"
+                if pd.notna(average_interest)
+                else "No data"
+            )
+
+            yearly_surveys = (
+                surveys.dropna(subset=["Year"])
+                .groupby("Year")[["Satisfaction", "Interest"]]
+                .mean()
+                .sort_index()
+            )
+
+            yearly_surveys.index = (
+                yearly_surveys.index.astype(int).astype(str)
+            )
+
+            st.write("**Average Satisfaction by Year**")
+            st.bar_chart(yearly_surveys["Satisfaction"])
+
+            st.write("**Average Interest by Year**")
+            st.bar_chart(yearly_surveys["Interest"])
+
+            st.write("**Annual Survey Averages**")
+            st.dataframe(
+                yearly_surveys.style.format(
+                    "{:.2f}", na_rep="No data"
+                )
+            )
+        else:
+            st.info("No numeric survey ratings for this selection.")
