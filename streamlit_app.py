@@ -126,3 +126,37 @@ else:
     st.dataframe(
         channel_revenue.to_frame().style.format("${:,.2f}")
     )
+st.subheader("Data Quality Checks")
+st.caption("These checks cover the entire uploaded file.")
+
+missing_cells = int(
+    data.replace(r"^\s*$", pd.NA, regex=True)
+    .isna()
+    .sum()
+    .sum()
+)
+duplicate_rows = int(data.duplicated().sum())
+negative_revenue = int((data["Revenue"] < 0).sum())
+
+st.write(f"Missing values: {missing_cells:,}")
+st.write(f"Duplicate rows: {duplicate_rows:,}")
+st.write(f"Negative revenue records: {negative_revenue:,}")
+
+if "Sales ID" in data.columns:
+    duplicate_ids = int(
+        data["Sales ID"].dropna().duplicated().sum()
+    )
+    st.write(f"Repeated Sales IDs: {duplicate_ids:,}")
+else:
+    duplicate_ids = 0
+    st.warning("Sales ID column is missing.")
+
+if (
+    missing_cells == 0
+    and duplicate_rows == 0
+    and negative_revenue == 0
+    and duplicate_ids == 0
+):
+    st.success("No issues found in these checks.")
+else:
+    st.warning("Review the flagged records before using the results.")
