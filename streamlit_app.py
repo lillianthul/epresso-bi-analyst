@@ -192,3 +192,10 @@ if "Category ID" in filtered_data.columns:
     )
 else:
     st.warning("Category analysis requires a Category ID column.")
+st.subheader("Monthly Revenue Details")
+st.caption(f"Monthly totals for: {selected_year}")
+
+st.dataframe(
+    monthly_revenue.to_frame()
+    .style.format("${:,.2f}")
+)
