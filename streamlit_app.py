@@ -92,3 +92,37 @@ st.line_chart(monthly_revenue)
 
 st.subheader("Data Preview — Selected Year(s)")
 st.dataframe(filtered_data.head(20))
+st.subheader("Revenue by Sales Channel")
+st.caption(f"Revenue for: {selected_year}")
+
+# Store types from the E-Presso Stores table you copied.
+store_types = {"SH00": "Website"}
+store_types.update({
+    f"SH{i:02d}": "Brick & Mortar"
+    for i in range(1, 21)
+})
+
+if "Store ID" not in filtered_data.columns:
+    st.error("Sales channel analysis requires a Store ID column.")
+else:
+    channel_data = filtered_data.copy()
+    channel_data["Sales Channel"] = (
+        channel_data["Store ID"]
+        .map(store_types)
+        .fillna("Unknown store")
+    )
+
+    if (channel_data["Sales Channel"] == "Unknown store").any():
+        st.warning("Some store IDs are unknown. Check the store information.")
+
+    channel_revenue = (
+        channel_data.groupby("Sales Channel")["Revenue"]
+        .sum()
+        .sort_index()
+    )
+    channel_revenue.name = "Revenue ($)"
+
+    st.bar_chart(channel_revenue)
+    st.dataframe(
+        channel_revenue.to_frame().style.format("${:,.2f}")
+    )
