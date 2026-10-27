@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 
+
 st.set_page_config(
     page_title="E-Presso Business Dashboard",
     page_icon="☕",
@@ -13,7 +14,9 @@ st.write(
 )
 
 
-# ---------- HELPER FUNCTIONS ----------
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
 
 def read_csv(file, text_only=False):
     file.seek(0)
@@ -146,7 +149,471 @@ def show_revenue_breakdown(
         )
 
 
-# ---------- SALES UPLOAD ----------
+# ============================================================
+# ANALYTICAL FUNCTIONS FOR ASSISTANT
+# ============================================================
+
+def get_revenue_by_channel(sales, stores):
+    required_store_columns = {"ID", "StoreType"}
+
+    if not required_store_columns.issubset(stores.columns):
+        return {
+            "error": "Stores data is missing ID or StoreType."
+        }
+
+    if "Store ID" not in sales.columns:
+        return {
+            "error": "Sales data is missing Store ID."
+        }
+
+    store_lookup = stores[
+        ["ID", "StoreType"]
+    ].rename(
+        columns={
+            "ID": "Store ID",
+            "StoreType": "Sales Channel"
+        }
+    )
+
+    lookup = store_lookup.copy()
+
+    lookup["Store ID"] = clean_text(lookup["Store ID"])
+    lookup["Sales Channel"] = clean_text(
+        lookup["Sales Channel"]
+    )
+
+    if lookup["Store ID"].isna().any():
+        return {
+            "error": "Stores data contains missing IDs."
+        }
+
+    if lookup["Store ID"].duplicated().any():
+        return {
+            "error": "Stores data contains repeated IDs."
+        }
+
+    working_sales = sales.copy()
+    working_sales["Store ID"] = clean_text(
+        working_sales["Store ID"]
+    )
+
+    connected = working_sales.merge(
+        lookup,
+        on="Store ID",
+        how="left",
+        validate="many_to_one"
+    )
+
+    totals = (
+        connected.groupby(
+            "Sales Channel",
+            dropna=False
+        )["Revenue"]
+        .sum()
+        .sort_values(ascending=False)
+    )
+
+    result = {}
+
+    for channel, revenue in totals.items():
+        label = (
+            "Unknown"
+            if pd.isna(channel)
+            else str(channel)
+        )
+        result[label] = round(float(revenue), 2)
+
+    return result
+
+
+def get_category_performance(sales, categories):
+    required = {"Category ID", "Category"}
+
+    if not required.issubset(categories.columns):
+        return {
+            "error": (
+                "Categories data is missing "
+                "Category ID or Category."
+            )
+        }
+
+    if "Category ID" not in sales.columns:
+        return {
+            "error": "Sales data is missing Category ID."
+        }
+
+    lookup = categories[
+        ["Category ID", "Category"]
+    ].copy()
+
+    lookup["Category ID"] = clean_text(
+        lookup["Category ID"]
+    )
+    lookup["Category"] = clean_text(
+        lookup["Category"]
+    )
+
+    if lookup["Category ID"].isna().any():
+        return {
+            "error": "Categories data contains missing IDs."
+        }
+
+    if lookup["Category ID"].duplicated().any():
+        return {
+            "error": "Categories data contains repeated IDs."
+        }
+
+    working_sales = sales.copy()
+    working_sales["Category ID"] = clean_text(
+        working_sales["Category ID"]
+    )
+
+    connected = working_sales.merge(
+        lookup,
+        on="Category ID",
+        how="left",
+        validate="many_to_one"
+    )
+
+    totals = (
+        connected.groupby(
+            "Category",
+            dropna=False
+        )["Revenue"]
+        .sum()
+        .sort_values(ascending=False)
+    )
+
+    result = {}
+
+    for category, revenue in totals.items():
+        label = (
+            "Unknown"
+            if pd.isna(category)
+            else str(category)
+        )
+        result[label] = round(float(revenue), 2)
+
+    return result
+
+
+def get_data_quality_report(sales):
+    missing_cells = int(
+        sales.replace(
+            r"^\s*$",
+            pd.NA,
+            regex=True
+        )
+        .isna()
+        .sum()
+        .sum()
+    )
+
+    duplicate_rows = int(
+        sales.duplicated().sum()
+    )
+
+    negative_revenue = int(
+        (sales["Revenue"] < 0).sum()
+    )
+
+    repeated_sales_ids = None
+
+    if "Sales ID" in sales.columns:
+        sales_ids = clean_text(
+            sales["Sales ID"]
+        )
+
+        repeated_sales_ids = int(
+            sales_ids.dropna()
+            .duplicated()
+            .sum()
+        )
+
+    return {
+        "missing_values": missing_cells,
+        "duplicate_rows": duplicate_rows,
+        "negative_revenue_records": negative_revenue,
+        "repeated_sales_ids": repeated_sales_ids
+    }
+
+
+def get_total_revenue(sales):
+    return {
+        "total_revenue": round(
+            float(sales["Revenue"].sum()),
+            2
+        )
+    }
+
+
+# ============================================================
+# ASSISTANT DISPATCHER
+# ============================================================
+
+def analytical_dispatcher(
+    question,
+    sales,
+    supporting_tables
+):
+    question_lower = question.lower().strip()
+
+    # Profit questions should not be answered
+    # using revenue alone.
+    if (
+        "profit" in question_lower
+        or "profitable" in question_lower
+        or "profitability" in question_lower
+    ):
+        return {
+            "supported": False,
+            "function": None,
+            "arguments": {},
+            "raw_result": None,
+            "answer": (
+                "The available data cannot reliably determine "
+                "profitability. The dashboard contains revenue, "
+                "but profitability would also require information "
+                "such as expenses, product costs, labor costs, "
+                "rent, and other operating costs."
+            )
+        }
+
+    # Causation questions
+    if (
+        "cause" in question_lower
+        or "causes" in question_lower
+        or "caused" in question_lower
+    ):
+        return {
+            "supported": False,
+            "function": None,
+            "arguments": {},
+            "raw_result": None,
+            "answer": (
+                "The available observational data cannot establish "
+                "causation. It may be possible to examine an "
+                "association between variables, but an association "
+                "does not prove that one variable caused another."
+            )
+        }
+
+    # Sales channel
+    if (
+        "channel" in question_lower
+        or "website" in question_lower
+        or "brick" in question_lower
+    ):
+        if "Stores" not in supporting_tables:
+            return {
+                "supported": False,
+                "function": "get_revenue_by_channel",
+                "arguments": {},
+                "raw_result": None,
+                "answer": (
+                    "I cannot calculate revenue by sales channel "
+                    "until the Stores CSV is uploaded."
+                )
+            }
+
+        result = get_revenue_by_channel(
+            sales,
+            supporting_tables["Stores"]
+        )
+
+        if "error" in result:
+            return {
+                "supported": False,
+                "function": "get_revenue_by_channel",
+                "arguments": {},
+                "raw_result": result,
+                "answer": result["error"]
+            }
+
+        if not result:
+            answer = (
+                "No sales-channel revenue could be calculated "
+                "from the current data."
+            )
+        else:
+            ordered = sorted(
+                result.items(),
+                key=lambda item: item[1],
+                reverse=True
+            )
+
+            details = ", ".join(
+                f"{name}: ${value:,.2f}"
+                for name, value in ordered
+            )
+
+            top_name, top_value = ordered[0]
+
+            answer = (
+                f"{details}. "
+                f"{top_name} generated the most revenue at "
+                f"${top_value:,.2f}. "
+                "These figures describe revenue, not profit."
+            )
+
+        return {
+            "supported": True,
+            "function": "get_revenue_by_channel",
+            "arguments": {
+                "data_scope": "current dashboard selection"
+            },
+            "raw_result": result,
+            "answer": answer
+        }
+
+    # Product categories
+    if (
+        "category" in question_lower
+        or "categories" in question_lower
+    ):
+        if "Categories" not in supporting_tables:
+            return {
+                "supported": False,
+                "function": "get_category_performance",
+                "arguments": {},
+                "raw_result": None,
+                "answer": (
+                    "I cannot calculate category performance "
+                    "until the Categories CSV is uploaded."
+                )
+            }
+
+        result = get_category_performance(
+            sales,
+            supporting_tables["Categories"]
+        )
+
+        if "error" in result:
+            return {
+                "supported": False,
+                "function": "get_category_performance",
+                "arguments": {},
+                "raw_result": result,
+                "answer": result["error"]
+            }
+
+        if not result:
+            answer = (
+                "No product-category revenue could be calculated "
+                "from the current data."
+            )
+        else:
+            ordered = sorted(
+                result.items(),
+                key=lambda item: item[1],
+                reverse=True
+            )
+
+            details = ", ".join(
+                f"{name}: ${value:,.2f}"
+                for name, value in ordered
+            )
+
+            top_name, top_value = ordered[0]
+
+            answer = (
+                f"{details}. "
+                f"The highest-revenue category is {top_name} "
+                f"at ${top_value:,.2f}. "
+                "Revenue does not establish category profitability."
+            )
+
+        return {
+            "supported": True,
+            "function": "get_category_performance",
+            "arguments": {
+                "data_scope": "current dashboard selection"
+            },
+            "raw_result": result,
+            "answer": answer
+        }
+
+    # Data quality
+    if (
+        "quality" in question_lower
+        or "missing" in question_lower
+        or "duplicate" in question_lower
+        or "negative" in question_lower
+    ):
+        result = get_data_quality_report(sales)
+
+        repeated = result["repeated_sales_ids"]
+
+        repeated_text = (
+            "not checked"
+            if repeated is None
+            else f"{repeated:,}"
+        )
+
+        answer = (
+            f"The current sales data contains "
+            f"{result['missing_values']:,} missing values, "
+            f"{result['duplicate_rows']:,} duplicate rows, "
+            f"{result['negative_revenue_records']:,} negative "
+            f"revenue records, and {repeated_text} repeated "
+            f"Sales IDs."
+        )
+
+        return {
+            "supported": True,
+            "function": "get_data_quality_report",
+            "arguments": {
+                "data_scope": "current dashboard selection"
+            },
+            "raw_result": result,
+            "answer": answer
+        }
+
+    # Total revenue
+    if (
+        "total revenue" in question_lower
+        or (
+            "revenue" in question_lower
+            and "total" in question_lower
+        )
+    ):
+        result = get_total_revenue(sales)
+
+        total = result["total_revenue"]
+
+        answer = (
+            f"Total revenue for the current dashboard selection "
+            f"is ${total:,.2f}. "
+            "Revenue is not the same as profit."
+        )
+
+        return {
+            "supported": True,
+            "function": "get_total_revenue",
+            "arguments": {
+                "data_scope": "current dashboard selection"
+            },
+            "raw_result": result,
+            "answer": answer
+        }
+
+    return {
+        "supported": False,
+        "function": None,
+        "arguments": {},
+        "raw_result": None,
+        "answer": (
+            "I cannot reliably answer that question with the "
+            "approved analytical functions currently available. "
+            "Try asking about total revenue, sales channels, "
+            "product categories, or data quality."
+        )
+    }
+
+
+# ============================================================
+# SALES UPLOAD
+# ============================================================
 
 uploaded_file = st.file_uploader(
     "Sales CSV",
@@ -165,7 +632,8 @@ try:
 
     if missing:
         st.error(
-            f"Sales file is missing: {', '.join(sorted(missing))}"
+            f"Sales file is missing: "
+            f"{', '.join(sorted(missing))}"
         )
         st.stop()
 
@@ -174,7 +642,8 @@ try:
         st.stop()
 
     data["Revenue"] = pd.to_numeric(
-        data["Revenue"], errors="raise"
+        data["Revenue"],
+        errors="raise"
     )
 
     data["Date"] = pd.to_datetime(
@@ -203,9 +672,12 @@ st.success(
 )
 
 
-# ---------- SUPPORTING UPLOADS ----------
+# ============================================================
+# SUPPORTING UPLOADS
+# ============================================================
 
 st.subheader("Supporting Data Tables")
+
 st.write(
     "Upload your Stores, Products, Categories, "
     "and Surveys CSV files."
@@ -239,23 +711,35 @@ supporting_tables = {}
 for table_name, file in supporting_files.items():
     if file is not None:
         try:
-            table = read_csv(file, text_only=True)
+            table = read_csv(
+                file,
+                text_only=True
+            )
+
             supporting_tables[table_name] = table
 
             st.success(
-                f"{table_name}: {len(table):,} rows loaded"
+                f"{table_name}: "
+                f"{len(table):,} rows loaded"
             )
 
-            with st.expander(f"Preview {table_name}"):
-                st.dataframe(table.head(10))
+            with st.expander(
+                f"Preview {table_name}"
+            ):
+                st.dataframe(
+                    table.head(10)
+                )
 
         except Exception as error:
             st.error(
-                f"Could not load {table_name}: {error}"
+                f"Could not load {table_name}: "
+                f"{error}"
             )
 
 
-# ---------- YEAR FILTER ----------
+# ============================================================
+# YEAR FILTER
+# ============================================================
 
 st.divider()
 st.subheader("Dashboard Filters")
@@ -277,7 +761,9 @@ else:
     ].copy()
 
 
-# ---------- SALES METRICS ----------
+# ============================================================
+# SALES METRICS
+# ============================================================
 
 st.subheader("Sales Overview")
 
@@ -294,14 +780,17 @@ col2.metric(
 )
 
 st.caption(
-    f"Period: {filtered_data['Date'].min():%b %Y} "
+    f"Period: "
+    f"{filtered_data['Date'].min():%b %Y} "
     f"to {filtered_data['Date'].max():%b %Y}. "
     "Revenue is not profit. "
     "Sales rows are not necessarily orders."
 )
 
 
-# ---------- ANNUAL REVENUE ----------
+# ============================================================
+# ANNUAL REVENUE
+# ============================================================
 
 annual_revenue = (
     filtered_data.groupby(
@@ -314,25 +803,39 @@ annual_revenue = (
 annual_revenue.index = (
     annual_revenue.index.astype(str)
 )
+
 annual_revenue.index.name = "Year"
 
 st.subheader("Revenue by Year")
-st.caption(f"Revenue for: {selected_year}")
-st.bar_chart(annual_revenue)
+st.caption(
+    f"Revenue for: {selected_year}"
+)
 
-with st.expander("Annual Revenue Totals"):
+st.bar_chart(
+    annual_revenue
+)
+
+with st.expander(
+    "Annual Revenue Totals"
+):
     st.dataframe(
-        annual_revenue.to_frame().style.format(
+        annual_revenue
+        .to_frame()
+        .style
+        .format(
             {"Revenue": "${:,.2f}"}
         )
     )
 
 
-# ---------- MONTHLY REVENUE ----------
+# ============================================================
+# MONTHLY REVENUE
+# ============================================================
 
 monthly_revenue = (
     filtered_data.groupby(
-        filtered_data["Date"].dt.to_period("M")
+        filtered_data["Date"]
+        .dt.to_period("M")
     )["Revenue"]
     .sum()
     .sort_index()
@@ -341,36 +844,60 @@ monthly_revenue = (
 monthly_revenue.index = (
     monthly_revenue.index.astype(str)
 )
+
 monthly_revenue.index.name = "Month"
 
 st.subheader("Revenue by Month")
-st.caption(f"Monthly totals for: {selected_year}")
-st.line_chart(monthly_revenue)
+st.caption(
+    f"Monthly totals for: {selected_year}"
+)
 
-with st.expander("Monthly Revenue Details"):
+st.line_chart(
+    monthly_revenue
+)
+
+with st.expander(
+    "Monthly Revenue Details"
+):
     st.dataframe(
-        monthly_revenue.to_frame().style.format(
+        monthly_revenue
+        .to_frame()
+        .style
+        .format(
             {"Revenue": "${:,.2f}"}
         )
     )
 
 
-# ---------- SALES CHANNEL REVENUE ----------
+# ============================================================
+# SALES CHANNEL REVENUE
+# ============================================================
 
 st.subheader("Revenue by Sales Channel")
-st.caption(f"Revenue for: {selected_year}")
+st.caption(
+    f"Revenue for: {selected_year}"
+)
 
 if "Stores" not in supporting_tables:
     st.info(
-        "Upload the Stores CSV to calculate sales channels."
+        "Upload the Stores CSV "
+        "to calculate sales channels."
     )
 
 else:
-    stores = supporting_tables["Stores"].copy()
+    stores = (
+        supporting_tables["Stores"]
+        .copy()
+    )
 
-    if not {"ID", "StoreType"}.issubset(stores.columns):
+    if not {
+        "ID",
+        "StoreType"
+    }.issubset(stores.columns):
+
         st.error(
-            "Stores CSV needs ID and StoreType columns."
+            "Stores CSV needs ID "
+            "and StoreType columns."
         )
 
     else:
@@ -392,18 +919,27 @@ else:
         )
 
         st.caption(
-            "Source key: Sales.Store ID = Stores.ID."
+            "Source key: "
+            "Sales.Store ID = Stores.ID."
         )
 
 
-# ---------- CATEGORY REVENUE ----------
+# ============================================================
+# CATEGORY REVENUE
+# ============================================================
 
-st.subheader("Revenue by Product Category")
-st.caption(f"Revenue for: {selected_year}")
+st.subheader(
+    "Revenue by Product Category"
+)
+
+st.caption(
+    f"Revenue for: {selected_year}"
+)
 
 if "Categories" not in supporting_tables:
     st.info(
-        "Upload the Categories CSV to see category revenue."
+        "Upload the Categories CSV "
+        "to see category revenue."
     )
 
 else:
@@ -416,14 +952,22 @@ else:
     )
 
 
-# ---------- PRODUCT REVENUE ----------
+# ============================================================
+# PRODUCT REVENUE
+# ============================================================
 
-st.subheader("Revenue by Product")
-st.caption(f"Revenue for: {selected_year}")
+st.subheader(
+    "Revenue by Product"
+)
+
+st.caption(
+    f"Revenue for: {selected_year}"
+)
 
 if "Products" not in supporting_tables:
     st.info(
-        "Upload the Products CSV to see product revenue."
+        "Upload the Products CSV "
+        "to see product revenue."
     )
 
 else:
@@ -436,17 +980,25 @@ else:
     )
 
 
-# ---------- CUSTOMER SURVEYS ----------
+# ============================================================
+# CUSTOMER SURVEYS
+# ============================================================
 
-st.subheader("Customer Survey Results")
+st.subheader(
+    "Customer Survey Results"
+)
 
 if "Surveys" not in supporting_tables:
     st.info(
-        "Upload the survey results CSV to see this section."
+        "Upload the survey results CSV "
+        "to see this section."
     )
 
 else:
-    surveys = supporting_tables["Surveys"].copy()
+    surveys = (
+        supporting_tables["Surveys"]
+        .copy()
+    )
 
     required = {
         "Year",
@@ -454,7 +1006,9 @@ else:
         "Interest"
     }
 
-    missing = required - set(surveys.columns)
+    missing = (
+        required - set(surveys.columns)
+    )
 
     if missing:
         st.error(
@@ -464,68 +1018,102 @@ else:
 
     else:
         surveys["Year"] = pd.to_numeric(
-            clean_text(surveys["Year"]).str.replace(
-                r"^[Yy]", "", regex=True
+            clean_text(
+                surveys["Year"]
+            ).str.replace(
+                r"^[Yy]",
+                "",
+                regex=True
             ),
             errors="coerce"
         )
 
         valid_year = (
             surveys["Year"].notna()
-            & surveys["Year"].between(1, 9999)
+            & surveys["Year"].between(
+                1,
+                9999
+            )
             & surveys["Year"].mod(1).eq(0)
         )
 
-        invalid_years = int((~valid_year).sum())
+        invalid_years = int(
+            (~valid_year).sum()
+        )
 
         if invalid_years:
             st.warning(
-                f"{invalid_years:,} survey rows have "
-                "missing or invalid years and are excluded."
+                f"{invalid_years:,} survey rows "
+                "have missing or invalid years "
+                "and are excluded."
             )
 
-        surveys = surveys[valid_year].copy()
+        surveys = surveys[
+            valid_year
+        ].copy()
 
-        for column in ["Satisfaction", "Interest"]:
-            original = clean_text(surveys[column])
+        for column in [
+            "Satisfaction",
+            "Interest"
+        ]:
+            original = clean_text(
+                surveys[column]
+            )
 
             numeric = pd.to_numeric(
-                original, errors="coerce"
+                original,
+                errors="coerce"
             )
 
             finite = numeric.map(
                 lambda value: (
                     pd.notna(value)
-                    and float("-inf") < value < float("inf")
+                    and float("-inf")
+                    < value
+                    < float("inf")
                 )
             )
 
             invalid_count = int(
-                (original.notna() & ~finite).sum()
+                (
+                    original.notna()
+                    & ~finite
+                ).sum()
             )
 
-            surveys[column] = numeric.where(finite)
+            surveys[column] = (
+                numeric.where(finite)
+            )
 
             if invalid_count:
                 st.warning(
-                    f"{invalid_count:,} invalid {column} "
-                    "values were excluded from averages."
+                    f"{invalid_count:,} invalid "
+                    f"{column} values were "
+                    "excluded from averages."
                 )
 
         if selected_year != "All years":
             surveys = surveys[
-                surveys["Year"] == selected_year
+                surveys["Year"]
+                == selected_year
             ].copy()
 
         st.caption(
-            f"Survey results for: {selected_year}. "
-            "Missing or invalid ratings are excluded. "
-            "Each available store-year rating receives "
-            "equal weight."
+            f"Survey results for: "
+            f"{selected_year}. "
+            "Missing or invalid ratings "
+            "are excluded. "
+            "Each available store-year rating "
+            "receives equal weight."
         )
 
         has_ratings = (
-            surveys[["Satisfaction", "Interest"]]
+            surveys[
+                [
+                    "Satisfaction",
+                    "Interest"
+                ]
+            ]
             .notna()
             .any()
             .any()
@@ -533,27 +1121,39 @@ else:
 
         if has_ratings:
             average_satisfaction = (
-                surveys["Satisfaction"].mean()
+                surveys[
+                    "Satisfaction"
+                ].mean()
             )
 
             average_interest = (
-                surveys["Interest"].mean()
+                surveys[
+                    "Interest"
+                ].mean()
             )
 
             col1, col2 = st.columns(2)
 
             col1.metric(
                 "Average Satisfaction",
-                f"{average_satisfaction:.2f}"
-                if pd.notna(average_satisfaction)
-                else "No data"
+                (
+                    f"{average_satisfaction:.2f}"
+                    if pd.notna(
+                        average_satisfaction
+                    )
+                    else "No data"
+                )
             )
 
             col2.metric(
                 "Average Interest",
-                f"{average_interest:.2f}"
-                if pd.notna(average_interest)
-                else "No data"
+                (
+                    f"{average_interest:.2f}"
+                    if pd.notna(
+                        average_interest
+                    )
+                    else "No data"
+                )
             )
 
             st.caption(
@@ -561,12 +1161,18 @@ else:
                 f"{surveys['Satisfaction'].count():,} | "
                 "Available interest ratings: "
                 f"{surveys['Interest'].count():,}. "
-                "Missing responses may limit conclusions."
+                "Missing responses may limit "
+                "conclusions."
             )
 
             yearly_surveys = (
-                surveys.groupby("Year")[
-                    ["Satisfaction", "Interest"]
+                surveys.groupby(
+                    "Year"
+                )[
+                    [
+                        "Satisfaction",
+                        "Interest"
+                    ]
                 ]
                 .mean()
                 .sort_index()
@@ -579,22 +1185,31 @@ else:
             )
 
             st.write(
-                "**Average Satisfaction by Year**"
+                "**Average Satisfaction "
+                "by Year**"
             )
+
             st.bar_chart(
-                yearly_surveys["Satisfaction"]
+                yearly_surveys[
+                    "Satisfaction"
+                ]
             )
 
             st.write(
-                "**Average Interest by Year**"
+                "**Average Interest "
+                "by Year**"
             )
+
             st.bar_chart(
-                yearly_surveys["Interest"]
+                yearly_surveys[
+                    "Interest"
+                ]
             )
 
             st.write(
                 "**Annual Survey Averages**"
             )
+
             st.dataframe(
                 yearly_surveys.style.format(
                     "{:.2f}",
@@ -603,9 +1218,10 @@ else:
             )
 
             st.caption(
-                "Survey ratings are analyzed separately "
-                "from sales to avoid repeating store-year "
-                "ratings across sales rows."
+                "Survey ratings are analyzed "
+                "separately from sales to avoid "
+                "repeating store-year ratings "
+                "across sales rows."
             )
 
         else:
@@ -615,17 +1231,25 @@ else:
             )
 
 
-# ---------- SALES DATA QUALITY ----------
+# ============================================================
+# SALES DATA QUALITY
+# ============================================================
 
-st.subheader("Data Quality Checks")
+st.subheader(
+    "Data Quality Checks"
+)
+
 st.caption(
-    "These sales checks cover the entire uploaded file, "
-    "regardless of the year filter."
+    "These sales checks cover the entire "
+    "uploaded file, regardless of the "
+    "year filter."
 )
 
 missing_cells = int(
     data.replace(
-        r"^\s*$", pd.NA, regex=True
+        r"^\s*$",
+        pd.NA,
+        regex=True
     )
     .isna()
     .sum()
@@ -641,32 +1265,43 @@ negative_revenue = int(
 )
 
 st.write(
-    f"Missing values: {missing_cells:,}"
+    f"Missing values: "
+    f"{missing_cells:,}"
 )
+
 st.write(
-    f"Duplicate rows: {duplicate_rows:,}"
+    f"Duplicate rows: "
+    f"{duplicate_rows:,}"
 )
+
 st.write(
-    f"Negative revenue records: {negative_revenue:,}"
+    f"Negative revenue records: "
+    f"{negative_revenue:,}"
 )
 
 duplicate_ids = None
 
 if "Sales ID" in data.columns:
-    sales_ids = clean_text(data["Sales ID"])
+    sales_ids = clean_text(
+        data["Sales ID"]
+    )
 
     duplicate_ids = int(
-        sales_ids.dropna().duplicated().sum()
+        sales_ids
+        .dropna()
+        .duplicated()
+        .sum()
     )
 
     st.write(
-        f"Repeated Sales IDs: {duplicate_ids:,}"
+        f"Repeated Sales IDs: "
+        f"{duplicate_ids:,}"
     )
 
 else:
     st.warning(
-        "Sales ID is missing, so ID uniqueness "
-        "was not checked."
+        "Sales ID is missing, "
+        "so ID uniqueness was not checked."
     )
 
 if (
@@ -676,96 +1311,135 @@ if (
     and duplicate_ids == 0
 ):
     st.success(
-        "No issues found in these sales checks."
+        "No issues found in "
+        "these sales checks."
     )
 
 else:
     st.warning(
-        "Review flagged records or unavailable checks. "
-        "Negative revenue may represent returns; "
-        "verify its meaning."
+        "Review flagged records or "
+        "unavailable checks. "
+        "Negative revenue may represent "
+        "returns; verify its meaning."
     )
 
 
-# ---------- SUPPORTING DATA QUALITY ----------
+# ============================================================
+# SUPPORTING DATA QUALITY
+# ============================================================
 
 st.write(
-    "**Supporting Table Missing Values and Duplicates**"
+    "**Supporting Table Missing Values "
+    "and Duplicates**"
 )
 
 if supporting_tables:
     quality_rows = []
 
-    for name, table in supporting_tables.items():
+    for name, table in (
+        supporting_tables.items()
+    ):
         cleaned = table.replace(
-            r"^\s*$", pd.NA, regex=True
+            r"^\s*$",
+            pd.NA,
+            regex=True
         )
 
         quality_rows.append({
             "Table": name,
             "Rows": len(table),
             "Missing Cells": int(
-                cleaned.isna().sum().sum()
+                cleaned
+                .isna()
+                .sum()
+                .sum()
             ),
             "Duplicate Rows": int(
-                table.duplicated().sum()
+                table
+                .duplicated()
+                .sum()
             )
         })
 
     st.dataframe(
-        pd.DataFrame(quality_rows),
+        pd.DataFrame(
+            quality_rows
+        ),
         hide_index=True
     )
 
     st.caption(
         "Missing values are reported, "
         "not automatically removed. "
-        "Website location fields and survey ratings "
-        "may be unavailable."
+        "Website location fields and "
+        "survey ratings may be unavailable."
     )
 
-    survey_source = supporting_tables.get("Surveys")
+    survey_source = (
+        supporting_tables.get(
+            "Surveys"
+        )
+    )
 
     if survey_source is not None:
-        if {"Store ID", "Year"}.issubset(
+        if {
+            "Store ID",
+            "Year"
+        }.issubset(
             survey_source.columns
         ):
             survey_keys = pd.DataFrame({
                 "Store ID": clean_text(
-                    survey_source["Store ID"]
+                    survey_source[
+                        "Store ID"
+                    ]
                 ),
                 "Year": clean_text(
-                    survey_source["Year"]
+                    survey_source[
+                        "Year"
+                    ]
                 ).str.replace(
-                    r"^[Yy]", "", regex=True
+                    r"^[Yy]",
+                    "",
+                    regex=True
                 )
             })
 
             complete_keys = (
-                survey_keys.notna().all(axis=1)
+                survey_keys
+                .notna()
+                .all(axis=1)
             )
 
             repeated_survey_keys = int(
-                survey_keys.loc[complete_keys]
+                survey_keys.loc[
+                    complete_keys
+                ]
                 .duplicated()
                 .sum()
             )
 
             st.write(
-                "Repeated survey store-year combinations: "
+                "Repeated survey store-year "
+                "combinations: "
                 f"{repeated_survey_keys:,}"
             )
 
             if repeated_survey_keys:
                 st.warning(
-                    "Review repeated survey store-year "
-                    "combinations before interpreting averages."
+                    "Review repeated survey "
+                    "store-year combinations "
+                    "before interpreting averages."
                 )
 
 
-# ---------- RELATIONSHIP NOTES ----------
+# ============================================================
+# RELATIONSHIP NOTES
+# ============================================================
 
-with st.expander("Data Relationships and Assumptions"):
+with st.expander(
+    "Data Relationships and Assumptions"
+):
     st.markdown(
         """
 - Sales revenue is summed from the uploaded Revenue column.
@@ -782,9 +1456,162 @@ with st.expander("Data Relationships and Assumptions"):
     )
 
 
-# ---------- SALES PREVIEW ----------
+# ============================================================
+# ANALYTICAL ASSISTANT
+# ============================================================
+
+st.divider()
+
+st.header(
+    "E-Presso Analytical Assistant"
+)
+
+st.write(
+    "Ask a business question about the currently "
+    "loaded data. The assistant uses approved "
+    "analytical functions rather than generating "
+    "or executing arbitrary code."
+)
+
+st.caption(
+    f"Current analysis scope: {selected_year}. "
+    "The assistant uses the same year selection "
+    "as the dashboard."
+)
+
+if "assistant_question_count" not in st.session_state:
+    st.session_state[
+        "assistant_question_count"
+    ] = 0
+
+question_limit = 10
+
+questions_remaining = (
+    question_limit
+    - st.session_state[
+        "assistant_question_count"
+    ]
+)
+
+st.caption(
+    f"Questions remaining this session: "
+    f"{questions_remaining}"
+)
+
+question = st.text_input(
+    "Ask the analytical assistant",
+    placeholder=(
+        "Example: Which sales channel "
+        "generated the most revenue?"
+    )
+)
+
+ask_button = st.button(
+    "Analyze Question"
+)
+
+if ask_button:
+    if not question.strip():
+        st.warning(
+            "Enter a business question first."
+        )
+
+    elif (
+        st.session_state[
+            "assistant_question_count"
+        ]
+        >= question_limit
+    ):
+        st.error(
+            "The session question limit has "
+            "been reached. This limit helps "
+            "control assistant usage."
+        )
+
+    else:
+        st.session_state[
+            "assistant_question_count"
+        ] += 1
+
+        response = analytical_dispatcher(
+            question,
+            filtered_data,
+            supporting_tables
+        )
+
+        st.subheader(
+            "Assistant Response"
+        )
+
+        st.write(
+            response["answer"]
+        )
+
+        if response["supported"]:
+            st.caption(
+                "Finding: calculated from "
+                "the currently loaded data."
+            )
+        else:
+            st.caption(
+                "Limitation: the requested "
+                "conclusion is not supported "
+                "by the available approved "
+                "analytical functions or data."
+            )
+
+        with st.expander(
+            "Tool-Call Log"
+        ):
+            st.write(
+                "**Function used:**"
+            )
+
+            if response["function"]:
+                st.code(
+                    response["function"]
+                )
+            else:
+                st.write(
+                    "No analytical function "
+                    "was executed."
+                )
+
+            st.write(
+                "**Arguments:**"
+            )
+
+            st.json(
+                response["arguments"]
+            )
+
+            st.write(
+                "**Raw result:**"
+            )
+
+            if (
+                response["raw_result"]
+                is not None
+            ):
+                st.json(
+                    response[
+                        "raw_result"
+                    ]
+                )
+            else:
+                st.write(
+                    "No numerical result "
+                    "was produced."
+                )
+
+
+# ============================================================
+# SALES PREVIEW
+# ============================================================
 
 with st.expander(
     "Sales Data Preview — Selected Year(s)"
 ):
-    st.dataframe(filtered_data.head(20))
+    st.dataframe(
+        filtered_data.head(20)
+    )
