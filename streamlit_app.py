@@ -347,6 +347,18 @@ def get_total_revenue(sales):
     }
 
 
+
+def tool_contract(tool, value, definition, scope, rows_used, caveats):
+    return {
+        "tool": tool,
+        "value": value,
+        "definition": definition,
+        "scope": scope,
+        "rows_used": int(rows_used),
+        "caveats": caveats
+    }
+
+
 # ============================================================
 # ASSISTANT DISPATCHER
 # ============================================================
@@ -1484,7 +1496,7 @@ if "assistant_question_count" not in st.session_state:
         "assistant_question_count"
     ] = 0
 
-question_limit = 10
+question_limit = 15
 
 questions_remaining = (
     question_limit
@@ -1539,25 +1551,112 @@ if ask_button:
             supporting_tables
         )
 
+        scope_info = {
+            "year": str(selected_year),
+            "data_source": "currently uploaded E-Presso files"
+        }
+
+        if response["supported"] and response["function"]:
+            raw_value = response["raw_result"]
+            definitions = {
+                "get_total_revenue": "Sum of Revenue for the current dashboard selection.",
+                "get_revenue_by_channel": "Sum of sales revenue grouped by sales channel.",
+                "get_category_performance": "Sum of sales revenue grouped by product category.",
+                "get_data_quality_report": "Counts missing values, duplicate rows, negative revenue records, and repeated Sales IDs."
+            }
+            caveats = {
+                "get_total_revenue": ["Revenue is not profit.", "Results reflect the currently uploaded data."],
+                "get_revenue_by_channel": ["Revenue is not profit.", "Results reflect the currently uploaded data."],
+                "get_category_performance": ["Revenue does not establish category profitability.", "Results reflect the currently uploaded data."],
+                "get_data_quality_report": ["Negative revenue may represent returns and should be interpreted in context."]
+            }
+            response["raw_result"] = tool_contract(
+                response["function"],
+                raw_value,
+                definitions.get(response["function"], "Approved analytical calculation."),
+                scope_info,
+                len(filtered_data),
+                caveats.get(response["function"], [])
+            )
+
         st.subheader(
             "Assistant Response"
         )
 
-        st.write(
-            response["answer"]
+        st.markdown(
+            f"**Scope:** {selected_year} — currently uploaded data"
         )
+
+        st.markdown("### Findings")
+        st.write(response["answer"])
+
+        st.markdown("### Interpretation")
+        if response["supported"]:
+            if response["function"] == "get_total_revenue":
+                st.write(
+                    "This total is calculated directly from the Revenue "
+                    "column for the current dashboard selection."
+                )
+            elif response["function"] == "get_revenue_by_channel":
+                st.write(
+                    "The channel comparison identifies which sales channel "
+                    "generated the most revenue in the current scope."
+                )
+            elif response["function"] == "get_category_performance":
+                st.write(
+                    "The category comparison identifies which product "
+                    "categories contributed the most revenue in the current scope."
+                )
+            elif response["function"] == "get_data_quality_report":
+                st.write(
+                    "These checks help identify records that may affect "
+                    "the reliability or interpretation of the analysis."
+                )
+            else:
+                st.write(
+                    "The finding is based on an approved calculation using "
+                    "the currently loaded data."
+                )
+        else:
+            st.write(
+                "The requested conclusion is not supported by the available "
+                "data or approved analytical functions, so the assistant "
+                "does not guess."
+            )
+
+        st.markdown("### Next Steps")
+        if response["supported"]:
+            if response["function"] in {
+                "get_total_revenue",
+                "get_revenue_by_channel",
+                "get_category_performance"
+            }:
+                st.write(
+                    "Use this result as a revenue finding only. Revenue is "
+                    "not profit, so cost and expense information would be "
+                    "needed for profitability recommendations."
+                )
+            else:
+                st.write(
+                    "Review any flagged records and confirm their business "
+                    "meaning before changing or removing data."
+                )
+        else:
+            st.write(
+                "Try asking about total revenue, sales channels, product "
+                "categories, or data quality. No recommendation is supported "
+                "when the required information is unavailable."
+            )
 
         if response["supported"]:
             st.caption(
-                "Finding: calculated from "
-                "the currently loaded data."
+                "Finding: calculated from the currently loaded data "
+                "using an approved analytical function."
             )
         else:
             st.caption(
-                "Limitation: the requested "
-                "conclusion is not supported "
-                "by the available approved "
-                "analytical functions or data."
+                "Limitation: the requested conclusion is not supported "
+                "by the available approved analytical functions or data."
             )
 
         with st.expander(
